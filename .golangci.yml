@@ -44,6 +44,27 @@ linters:
             - github.com/google/renameio/v2
             - github.com/stuffbucket/ovh-cli/internal/xdgpaths
 
+        # internal/auth allowlist per PRD-08 §Canonical depguard ruleset and
+        # PRD-06 §Canonical package registry. Future iterations import x/oauth2,
+        # go-keyring, cli/browser, huh, x/term, x/sync/singleflight; listing
+        # them now means the allowlist doesn't need flag-day updates.
+        internal-auth-allowlist:
+          files:
+            - '**/internal/auth/**/*.go'
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/ovh/go-ovh/ovh
+            - golang.org/x/oauth2
+            - github.com/zalando/go-keyring
+            - github.com/cli/browser
+            - github.com/charmbracelet/huh
+            - golang.org/x/term
+            - golang.org/x/sync/singleflight
+            - gopkg.in/ini.v1
+            - github.com/google/renameio/v2
+            - github.com/stuffbucket/ovh-cli/internal/xdgpaths
+
     forbidigo:
       forbid:
         - pattern: 'auth\.(LoadCredentials|StoreCredentials|DeleteCredentials|RefreshOAuth2|NewPKCE|RandomState|LoopbackListen|ExchangePKCE|ValidateHost)'

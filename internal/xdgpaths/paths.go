@@ -41,3 +41,7 @@ func CatalogDir(region string) string { return filepath.Join(Cache(), "catalog",
 
 // LogFile returns the rotating log file path.
 func LogFile() string { return filepath.Join(State(), "logs", "ovh.log") }
+
+// Reload re-reads XDG_* env vars. Tests that mutate XDG_CONFIG_HOME (etc.)
+// via t.Setenv must call Reload to invalidate adrg/xdg's at-init cache.
+func Reload() { xdg.Reload() }
