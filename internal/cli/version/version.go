@@ -2,6 +2,9 @@
 //
 // Build-time values are injected by goreleaser via -ldflags (PRD-09); falling
 // back to runtime/debug.BuildInfo keeps `go run` and `go install` informative.
+//
+// The package-level vars are unexported so other packages cannot mutate them
+// in tests; the linker -X flag still resolves identifiers regardless of export.
 package version
 
 import (
@@ -12,12 +15,9 @@ import (
 )
 
 var (
-	// Version is the semver string; overwritten via -ldflags at release time.
-	Version = "0.1.0-dev"
-	// Commit is the git commit hash; overwritten via -ldflags at release time.
-	Commit = "unknown"
-	// Date is the build date; overwritten via -ldflags at release time.
-	Date = "unknown"
+	version = "0.1.0-dev"
+	commit  = "unknown"
+	date    = "unknown"
 )
 
 // NewCmd returns the cobra command for `ovh version`.
@@ -35,7 +35,7 @@ func NewCmd() *cobra.Command {
 }
 
 func resolve() (v, c, d string) {
-	v, c, d = Version, Commit, Date
+	v, c, d = version, commit, date
 	if c != "unknown" && d != "unknown" {
 		return
 	}

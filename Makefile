@@ -7,9 +7,9 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -s -w \
-	-X $(MODULE)/internal/cli/version.Version=$(VERSION) \
-	-X $(MODULE)/internal/cli/version.Commit=$(COMMIT) \
-	-X $(MODULE)/internal/cli/version.Date=$(DATE)
+	-X $(MODULE)/internal/cli/version.version=$(VERSION) \
+	-X $(MODULE)/internal/cli/version.commit=$(COMMIT) \
+	-X $(MODULE)/internal/cli/version.date=$(DATE)
 
 build:   ## Build the ovh binary
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) $(PKG)

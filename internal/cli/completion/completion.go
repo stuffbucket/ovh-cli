@@ -24,8 +24,9 @@ func NewCmd() *cobra.Command {
 				return root.GenFishCompletion(out, true)
 			case "powershell":
 				return root.GenPowerShellCompletionWithDesc(out)
+			default:
+				panic("completion: unreachable; cobra.OnlyValidArgs guards entry")
 			}
-			return nil // unreachable; OnlyValidArgs guards entry
 		},
 	}
 }

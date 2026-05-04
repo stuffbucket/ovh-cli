@@ -9,7 +9,15 @@ import (
 	"time"
 )
 
-// frozenNow is a stable clock for Stale() determinism.
+// fixtureTime is the FetchedAt baked into testdata/apispace.meta.json.
+var fixtureTime = time.Date(2026, 5, 4, 0, 0, 0, 0, time.UTC)
+
+// freshClock reports a wall-clock 1 second past fixtureTime so the cache is
+// fresh (Stale=false) for tests that don't care about staleness.
+var freshClock = frozenNow(fixtureTime.Add(time.Second))
+
+// frozenNow returns a clock that always reports t. The shared helper keeps
+// every test deterministic — no test should accept time.Now as the clock.
 func frozenNow(t time.Time) func() time.Time { return func() time.Time { return t } }
 
 // copyFixture lays the testdata fixtures into a fresh tempdir at mode 0700,
@@ -32,10 +40,21 @@ func copyFixture(t *testing.T) string {
 	return dir
 }
 
+func TestOpenCache_PanicsOnEmptyRegion(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for empty region")
+		}
+	}()
+	_, _ = openCacheAt(t.TempDir(), "", freshClock)
+}
+
 func TestOpenCache_NoMetaReturnsErrNoCache(t *testing.T) {
 	dir := t.TempDir()
-	_ = os.Chmod(dir, 0o700)
-	_, err := openCacheAt(dir, "ovh-eu", time.Now)
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	_, err := openCacheAt(dir, "ovh-eu", freshClock)
 	if !errors.Is(err, ErrNoCache) {
 		t.Fatalf("got %v; want ErrNoCache", err)
 	}
@@ -49,7 +68,7 @@ func TestOpenCache_LooserDirModeRefused(t *testing.T) {
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	_, err := openCacheAt(dir, "ovh-eu", time.Now)
+	_, err := openCacheAt(dir, "ovh-eu", freshClock)
 	if !errors.Is(err, ErrCachePerms) {
 		t.Fatalf("got %v; want ErrCachePerms", err)
 	}
@@ -57,7 +76,7 @@ func TestOpenCache_LooserDirModeRefused(t *testing.T) {
 
 func TestOpenCache_RegionMismatch(t *testing.T) {
 	dir := copyFixture(t)
-	_, err := openCacheAt(dir, "ovh-us", time.Now)
+	_, err := openCacheAt(dir, "ovh-us", freshClock)
 	if !errors.Is(err, ErrCacheCorrupt) {
 		t.Fatalf("got %v; want ErrCacheCorrupt", err)
 	}
@@ -68,23 +87,30 @@ func TestOpenCache_CorruptMeta(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "apispace.meta.json"), []byte("{ not json"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_, err := openCacheAt(dir, "ovh-eu", time.Now)
+	_, err := openCacheAt(dir, "ovh-eu", freshClock)
+	if !errors.Is(err, ErrCacheCorrupt) {
+		t.Fatalf("got %v; want ErrCacheCorrupt", err)
+	}
+}
+
+func TestOpenCache_CorruptSpec(t *testing.T) {
+	dir := copyFixture(t)
+	if err := os.WriteFile(filepath.Join(dir, "apispace.json"), []byte("{ not json"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := openCacheAt(dir, "ovh-eu", freshClock)
 	if !errors.Is(err, ErrCacheCorrupt) {
 		t.Fatalf("got %v; want ErrCacheCorrupt", err)
 	}
 }
 
 func TestOpenCache_HappyPath(t *testing.T) {
-	dir := copyFixture(t)
-	q, err := openCacheAt(dir, "ovh-eu", frozenNow(time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)))
-	if err != nil {
-		t.Fatalf("OpenCache: %v", err)
-	}
+	q := loadFixture(t)
 	if got, want := q.Region(), "ovh-eu"; got != want {
 		t.Fatalf("Region=%q want %q", got, want)
 	}
-	if !q.FetchedAt().Equal(time.Date(2026, 5, 4, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("FetchedAt=%v unexpected", q.FetchedAt())
+	if !q.FetchedAt().Equal(fixtureTime) {
+		t.Fatalf("FetchedAt=%v want %v", q.FetchedAt(), fixtureTime)
 	}
 	if q.Stale() {
 		t.Fatalf("Stale()=true within 24h")
@@ -124,6 +150,9 @@ func TestQuerier_Describe(t *testing.T) {
 	if got, want := ps["GET"].Description, "List instances"; got != want {
 		t.Errorf("Description=%q want %q", got, want)
 	}
+	if _, ok := q.Describe("/nonexistent"); ok {
+		t.Errorf("Describe('/nonexistent') ok=true; want false")
+	}
 }
 
 func TestQuerier_Paths(t *testing.T) {
@@ -140,29 +169,28 @@ func TestQuerier_Search(t *testing.T) {
 	if len(hits) != 2 {
 		t.Fatalf("Search('/cloud/') len=%d want 2 (got %v)", len(hits), hits)
 	}
-	if hits := q.Search("/missing"); len(hits) != 0 {
-		t.Errorf("Search('/missing') len=%d want 0", len(hits))
+	if hits := q.Search("/missing"); hits != nil {
+		t.Errorf("Search('/missing') = %v; want nil", hits)
 	}
 }
 
 func TestQuerier_Stale(t *testing.T) {
 	dir := copyFixture(t)
-	// FetchedAt in the fixture is 2026-05-04T00:00:00Z. Pretend "now" is
-	// 25h later to cross the TTL boundary.
-	clock := frozenNow(time.Date(2026, 5, 5, 1, 0, 0, 0, time.UTC))
+	// Cross the TTL by clocking forward 25h past FetchedAt.
+	clock := frozenNow(fixtureTime.Add(25 * time.Hour))
 	q, err := openCacheAt(dir, "ovh-eu", clock)
 	if err != nil {
 		t.Fatalf("OpenCache: %v", err)
 	}
 	if !q.Stale() {
-		t.Fatal("Stale() false past 24h")
+		t.Fatal("Stale()=false past 24h")
 	}
 }
 
 func loadFixture(t *testing.T) Querier {
 	t.Helper()
 	dir := copyFixture(t)
-	q, err := openCacheAt(dir, "ovh-eu", time.Now)
+	q, err := openCacheAt(dir, "ovh-eu", freshClock)
 	if err != nil {
 		t.Fatalf("OpenCache: %v", err)
 	}

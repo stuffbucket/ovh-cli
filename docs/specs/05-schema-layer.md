@@ -82,7 +82,7 @@ Native OVH shape preserved per service, merged under `services`. No OpenAPI conv
 type Querier interface {
     HasPath(method, path string) bool
     Describe(path string) (PathSpec, bool)
-    Search(prefix string) []PathSpec
+    Search(prefix string) []string
     Paths() []string
     Region() string
     FetchedAt() time.Time
@@ -97,7 +97,7 @@ Package-level constructors (cited by the [canonical package registry in PRD-06](
 // Sentinel errors.
 var (
     ErrNoCache      = errors.New("schema: no apispace.json for region; call Refresh first")
-    ErrCacheCorrupt = errors.New("schema: apispace.json failed schema-hash validation")
+    ErrCacheCorrupt = errors.New("schema: apispace.json failed validation")
     ErrCachePerms   = errors.New("schema: cache directory mode looser than registry value; refusing to read")
 )
 

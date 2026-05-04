@@ -1,40 +1,18 @@
 package schema
 
 import (
-	"encoding/json"
 	"sort"
 	"strings"
 	"time"
 )
 
-// cachedQuerier satisfies Querier by holding apispace.json in memory and
-// answering queries by walking a single decoded map. The decode is one-shot
-// at OpenCache time; subsequent queries are pure lookups.
-//
-// gjson is used elsewhere in this package for streaming reads of large
-// fixtures; for runtime queries an explicit decoded map is simpler and the
-// spec is small enough (<5 MB) that holding it decoded is cheap.
+// cachedQuerier satisfies Querier. Constructed only by openCacheAt, which
+// guarantees services is non-nil and parsed (any decode failure becomes
+// ErrCacheCorrupt at open time, never at query time).
 type cachedQuerier struct {
-	meta   Meta
-	spec   []byte
-	now    func() time.Time
-	parsed *parsedSpec // lazy
-}
-
-type parsedSpec struct {
+	meta     Meta
 	services map[string]Service
-}
-
-func (q *cachedQuerier) ensureParsed() error {
-	if q.parsed != nil {
-		return nil
-	}
-	var as APISpace
-	if err := json.Unmarshal(q.spec, &as); err != nil {
-		return ErrCacheCorrupt
-	}
-	q.parsed = &parsedSpec{services: as.Services}
-	return nil
+	now      func() time.Time
 }
 
 func (q *cachedQuerier) Region() string       { return q.meta.Region }
@@ -62,10 +40,7 @@ func (q *cachedQuerier) Describe(path string) (PathSpec, bool) {
 }
 
 func (q *cachedQuerier) lookupPath(path string) (PathSpec, bool) {
-	if q.ensureParsed() != nil {
-		return nil, false
-	}
-	for _, svc := range q.parsed.services {
+	for _, svc := range q.services {
 		if ps, ok := svc.Paths[path]; ok {
 			return ps, true
 		}
@@ -74,11 +49,8 @@ func (q *cachedQuerier) lookupPath(path string) (PathSpec, bool) {
 }
 
 func (q *cachedQuerier) Paths() []string {
-	if q.ensureParsed() != nil {
-		return nil
-	}
-	out := make([]string, 0, 32)
-	for _, svc := range q.parsed.services {
+	out := make([]string, 0, len(q.services)*4) // 4 paths/service is a coarse but reasonable hint
+	for _, svc := range q.services {
 		for p := range svc.Paths {
 			out = append(out, p)
 		}
@@ -88,7 +60,7 @@ func (q *cachedQuerier) Paths() []string {
 }
 
 func (q *cachedQuerier) Search(prefix string) []string {
-	out := make([]string, 0)
+	var out []string
 	for _, p := range q.Paths() {
 		if strings.HasPrefix(p, prefix) {
 			out = append(out, p)
