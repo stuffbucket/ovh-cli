@@ -1,0 +1,15 @@
+{
+  "description": "Cloud Project APIs",
+  "paths": {
+    "/cloud/project": {
+      "GET": {
+        "description": "List cloud projects",
+        "auth": ["account:get"]
+      }
+    },
+    "/cloud/project/{serviceName}/instance": {
+      "GET": {"description": "List instances", "auth": ["account:get"]},
+      "POST": {"description": "Create instance", "auth": ["account:get"]}
+    }
+  }
+}

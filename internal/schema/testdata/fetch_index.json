@@ -1,0 +1,6 @@
+{
+  "apis": [
+    {"path": "/cloud", "description": "Cloud Project APIs"},
+    {"path": "/me", "description": "Account APIs"}
+  ]
+}

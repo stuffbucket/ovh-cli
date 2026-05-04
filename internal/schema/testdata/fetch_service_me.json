@@ -1,0 +1,8 @@
+{
+  "description": "Account APIs",
+  "paths": {
+    "/me": {
+      "GET": {"description": "Get account info", "auth": ["account:get"]}
+    }
+  }
+}

@@ -35,7 +35,7 @@ tools/schemagen/   # build-time DTO emitter (separate go.mod)
 ```
 Import rule (enforced by `depguard` in golangci-lint):
 
-- **Allowed source imports**: stdlib; `golang.org/x/sync/errgroup`; `github.com/tidwall/gjson`; `github.com/google/renameio/v2`; `github.com/ovh/go-ovh/ovh` (anonymous client only — Layer A never calls `NewOAuth2Client`, never holds AK/AS/CK, never touches the keyring or `internal/auth`); `<module>/internal/xdgpaths` (leaf package wrapping `adrg/xdg`; resolves the schema cache path without pulling in `internal/config`).
+- **Allowed source imports**: stdlib (including `net/http` for anonymous discovery and `encoding/json` for typed decode); `golang.org/x/sync/errgroup`; `github.com/google/renameio/v2`; `<module>/internal/xdgpaths` (leaf package wrapping `adrg/xdg`; resolves the schema cache path without pulling in `internal/config`). **Layer A does NOT use `github.com/ovh/go-ovh/ovh`** — go-ovh's `NewClient` mutates internal state inside `NewRequest`, racing with errgroup fan-out, and anonymous `/1.0/?format=json` doesn't need go-ovh's signing logic. Authenticated callers in phase 2b's `internal/client` still go through go-ovh.
 - **Transitive deps** brought in via `go-ovh` (notably `golang.org/x/oauth2`) are not source-imported by `internal/schema` and therefore not subject to the rule. Their inclusion in the binary is governed by PRD-08, not by this layer rule.
 - **Disallowed source imports**: anything in `internal/cli`, `internal/auth`, `internal/client`, `internal/config`, plus any other third-party module not on the allowlist above.
 
