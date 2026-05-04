@@ -112,6 +112,13 @@ Hardening:
 
 **Implementation note**: `internal/auth/oauth.go` is the only package in the codebase that source-imports `golang.org/x/oauth2` (PKCE verifier, state, code-exchange primitives). The resulting `*oauth2.TokenSource` is handed to `go-ovh.NewOAuth2Client`. `internal/schema` and `internal/client` do **not** source-import `x/oauth2` — they receive a configured client/credentials value from the composition root.
 
+**Token endpoint resolution**: `ExchangePKCE` and `RefreshOAuth2` derive the OAuth2 token endpoint URL from `Region.OAuth2Issuer`:
+
+1. If `<issuer>/.well-known/openid-configuration` is reachable, parse it and use the response's `token_endpoint` field (OIDC discovery — OVH may publish this in the future).
+2. Otherwise, fall back to `<issuer>/token` (RFC 6749 default).
+
+The discovered/derived URL is **also** validated against `region.ValidationHostPattern` via `auth.ValidateHost` before any HTTP call — same threat model as the authorize URL. Phase 2b iter 3 RC verifies this against OVH's actual deployment; if neither discovery nor a stable `/token` endpoint works, the `Region` struct gains a `TokenURL` field at that point.
+
 ### Classic CK flow
 1. If AK/AS not provided, open `portal_create_app_url` in browser; user pastes AK + AS into prompts (`huh` password fields).
 2. POST `/auth/credential` with the rule set derived from `--scopes` (default: read-only on `/*`).
@@ -179,19 +186,39 @@ func DeleteCredentials(ctx context.Context, region, profile string) error
 
 ### `internal/auth/oauth.go` — OAuth2 PKCE
 ```go
-// NewPKCE returns a fresh verifier and its derived S256 challenge.
+// NewPKCE returns a fresh verifier (cryptographically-random ~43 bytes) and
+// its derived S256 challenge (base64url(sha256(verifier)) per RFC 7636).
 func NewPKCE() (verifier, challenge string)
 
 // RandomState returns a URL-safe 32-byte random state token.
 func RandomState() string
 
-// LoopbackListen binds a single-shot 127.0.0.1 listener, validates authorizeURL's
-// host against allowedHosts, opens the URL in the browser, and returns (code, state)
-// from the callback. Times out after the given duration.
-func LoopbackListen(ctx context.Context, authorizeURL string, allowedHosts []string, timeout time.Duration) (code, state string, err error)
+// LoopbackServer is a single-shot HTTP listener bound to 127.0.0.1:<random>
+// that captures the OAuth2 authorization-code callback. Two-phase
+// construction is necessary because the redirect_uri must be known BEFORE
+// the authorize URL is built and BEFORE the browser is opened.
+type LoopbackServer struct{ /* unexported */ }
 
-// ExchangePKCE swaps an authorization code for OAuth2 tokens using the PKCE verifier.
-func ExchangePKCE(ctx context.Context, region Region, code, verifier string) (Credentials, error)
+// NewLoopbackServer binds a listener on 127.0.0.1 with an OS-assigned port.
+func NewLoopbackServer() (*LoopbackServer, error)
+
+// RedirectURI returns the URL to embed in the authorize URL as redirect_uri.
+// Format: http://127.0.0.1:<port>/callback. RFC 8252 BCP for native apps.
+func (s *LoopbackServer) RedirectURI() string
+
+// Wait blocks until the OAuth2 callback arrives, the timeout fires, or ctx
+// is cancelled. Returns the code+state captured from the callback's query
+// params. ctx.Err takes precedence over timeout.
+func (s *LoopbackServer) Wait(ctx context.Context, timeout time.Duration) (code, state string, err error)
+
+// Close releases the listener; idempotent.
+func (s *LoopbackServer) Close() error
+
+// ExchangePKCE swaps an authorization code for OAuth2 tokens using the PKCE
+// verifier. redirectURI MUST match the one sent in the authorize step (the
+// OAuth2 server validates the binding). Token endpoint is resolved per
+// "Token endpoint resolution" above.
+func ExchangePKCE(ctx context.Context, region Region, code, verifier, redirectURI string) (Credentials, error)
 
 // RefreshOAuth2 exchanges the stored refresh token for a fresh access token.
 //
@@ -215,6 +242,35 @@ func RefreshOAuth2(ctx context.Context, region, profile string) (Credentials, er
 // browser, see Hardening above) and by the composition root when injecting
 // allowedHosts into Layer A (PRD-05 §Threat model).
 func ValidateHost(u string, allowedHosts []string) error
+```
+
+### `internal/auth/flow.go` — classic CK interactive flow
+```go
+// RunConsumerKeyFlow drives the classic AK/AS/CK consumer-key validation
+// flow per §Classic CK flow above. Called interactively by `ovh auth login
+// --method consumer-key` and as the recovery path of `ovh auth refresh`
+// when the stored CK is invalid AND --no-prompt is not set.
+//
+// Steps:
+//   1. Prompt for AK + AS via askAKAS (production: huh password fields;
+//      tests: stub function). If both empty, open region.PortalCreateAppURL
+//      first so the user can mint a new application.
+//   2. POST /auth/credential to region.EndpointURL with the requested rule
+//      set. Returns (consumerKey, validationUrl).
+//   3. Validate validationUrl host against region.ValidationHostPattern
+//      via ValidateHost.
+//   4. Open validationUrl in the browser. Poll /auth/credential/{id} until
+//      validationState=validated, or until ctx cancellation / timeout.
+//   5. Return Credentials{Method: MethodConsumerKey, AK, AS, CK, Region}.
+//
+// Pre:  ctx != nil; region must be a member of Regions(); profile != "";
+//       askAKAS != nil.
+// Post: nil error => returned Credentials is non-zero with Method =
+//       MethodConsumerKey, ApplicationKey/ApplicationSecret/ConsumerKey
+//       all populated, Region == region.ID. The CALLER (typically
+//       internal/cli/auth) is responsible for StoreCredentials and the
+//       RO config-key writes (last_validated_at, account, auth_method).
+func RunConsumerKeyFlow(ctx context.Context, region Region, profile string, askAKAS func(ctx context.Context) (ak, as string, err error)) (Credentials, error)
 ```
 
 ## `ovh auth status`
