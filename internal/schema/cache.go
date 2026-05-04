@@ -21,8 +21,9 @@ const CacheTTL = 24 * time.Hour
 //
 // Pre:  region != "".
 // Post: nil error => returned Querier is non-nil; Querier.Stale() may be true.
-//       On any non-nil error (ErrNoCache | ErrCacheCorrupt | ErrCachePerms) the
-//       returned Querier is nil; calling any method on it panics.
+//
+//	On any non-nil error (ErrNoCache | ErrCacheCorrupt | ErrCachePerms) the
+//	returned Querier is nil; calling any method on it panics.
 //
 // PRD-05 §OpenCache contract.
 func OpenCache(region string) (Querier, error) {
