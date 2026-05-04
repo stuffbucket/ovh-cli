@@ -27,7 +27,7 @@ jobs:
       - run: go test -race -coverprofile=coverage.out ./...
       - name: gofmt
         run: |
-          out=$(gofmt -l .)
+          out=$(gofmt -l $(go list -f '{{.Dir}}' ./...))
           if [ -n "$out" ]; then echo "$out"; exit 1; fi
 
   lint:
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.1
 
