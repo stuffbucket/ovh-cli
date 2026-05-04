@@ -14,28 +14,17 @@ import (
 	"github.com/stuffbucket/ovh-cli/internal/xdgpaths"
 )
 
-// confLocator is the ovh.conf discovery list. Built from defaultLocator() in
-// production; tests construct narrower locators via newConfLocator().
-type confLocator struct {
-	paths []string
-}
-
-// defaultLocator returns the PRD-04 §Read precedence walk:
-// ./ovh.conf -> $HOME/.ovh.conf -> $XDG_CONFIG_HOME/ovh/ovh.conf -> /etc/ovh.conf.
-// First existing readable file wins.
-func defaultLocator() confLocator {
+// loadDefaultConf walks PRD-04 §Read precedence (./ovh.conf -> $HOME/.ovh.conf
+// -> $XDG_CONFIG_HOME/ovh/ovh.conf -> /etc/ovh.conf) and returns the first
+// existing readable file parsed as INI. Returns (nil, "", nil) when no file
+// is found.
+func loadDefaultConf() (*ini.File, string, error) {
 	paths := []string{"ovh.conf"}
 	if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths, filepath.Join(home, ".ovh.conf"))
 	}
 	paths = append(paths, xdgpaths.ConfigFile(), "/etc/ovh.conf")
-	return confLocator{paths: paths}
-}
-
-// load returns the first existing ovh.conf parsed as an INI file.
-// Returns (nil, "", nil) when no file is found.
-func (l confLocator) load() (*ini.File, string, error) {
-	for _, p := range l.paths {
+	for _, p := range paths {
 		info, err := os.Stat(p)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -56,14 +45,16 @@ func (l confLocator) load() (*ini.File, string, error) {
 }
 
 // readCredsFromConf extracts (region) credentials from a parsed ovh.conf.
-// Phase 2b iter 2a: reads classic AK/AS/CK and OAuth2 client_id/secret as
+// Returns the zero Credentials when the section is missing OR when the
+// section exists but contains no usable auth values — callers can then rely
+// on the IsZero() check to mean "no credentials in this source," matching
+// readEnv's contract.
+//
+// Phase 2b iter 2a reads classic AK/AS/CK and OAuth2 client_id/secret as
 // plaintext. Iter 2b adds keyring placeholder (`keyring:<region>:<key>`)
 // resolution when default.storage=keyring.
 func readCredsFromConf(f *ini.File, region string) Credentials {
-	if f == nil {
-		return Credentials{}
-	}
-	if !f.HasSection(region) {
+	if f == nil || !f.HasSection(region) {
 		return Credentials{}
 	}
 	s := f.Section(region)
@@ -73,11 +64,26 @@ func readCredsFromConf(f *ini.File, region string) Credentials {
 	creds.ConsumerKey = s.Key("consumer_key").String()
 	creds.ClientID = s.Key("client_id").String()
 	creds.ClientSecret = s.Key("client_secret").String()
-	switch {
-	case creds.ApplicationKey != "" || creds.ConsumerKey != "":
+
+	// Prefer an explicit auth_method when present (PRD-04 §Canonical key
+	// registry exposes <region>.auth_method); fall back to deriving from
+	// which fields populated, so files written by python-ovh — which do
+	// not write auth_method — still parse correctly.
+	switch Method(s.Key("auth_method").String()) {
+	case MethodConsumerKey:
 		creds.Method = MethodConsumerKey
-	case creds.ClientID != "" && creds.ClientSecret != "":
+	case MethodOAuth2:
 		creds.Method = MethodOAuth2
+	}
+	if creds.Method == MethodNone {
+		switch {
+		case creds.ApplicationKey != "" || creds.ConsumerKey != "":
+			creds.Method = MethodConsumerKey
+		case creds.ClientID != "" && creds.ClientSecret != "":
+			creds.Method = MethodOAuth2
+		default:
+			return Credentials{} // section present but no usable auth
+		}
 	}
 	return creds
 }
@@ -97,10 +103,13 @@ func writeOvhConf(f *ini.File) error {
 	return renameio.WriteFile(path, buf.Bytes(), 0o600)
 }
 
-// applyCreds writes creds into f's [region] section, deleting empty fields.
-// Used by StoreCredentials so partial writes don't leave stale values.
+// applyCreds writes creds into f's [region] section. Empty fields are
+// deleted so partial writes don't leave stale values. auth_method is
+// written explicitly (PRD-04 §Canonical key registry: <region>.auth_method)
+// so internal/config can read it without re-deriving.
 func applyCreds(f *ini.File, creds Credentials) {
 	s := f.Section(creds.Region)
+	setOrDelete(s, "auth_method", string(creds.Method))
 	setOrDelete(s, "application_key", creds.ApplicationKey)
 	setOrDelete(s, "application_secret", creds.ApplicationSecret)
 	setOrDelete(s, "consumer_key", creds.ConsumerKey)

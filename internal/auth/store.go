@@ -10,8 +10,9 @@ import (
 )
 
 // readEnv returns Credentials populated from OVH_* env vars per PRD-04
-// §Canonical env-var registry. Only returns non-zero when OVH_REGION matches
-// the requested region AND at least one credential field is set.
+// §Canonical env-var registry. Returns the zero Credentials when no
+// actionable auth values are set OR when OVH_REGION is set to a region
+// other than the requested one.
 func readEnv(region string) Credentials {
 	if envRegion := os.Getenv("OVH_REGION"); envRegion != "" && envRegion != region {
 		return Credentials{}
@@ -40,10 +41,12 @@ func readEnv(region string) Credentials {
 // Phase 2b iter 2a: keyring backend not yet wired — file is the only
 // persistent backend. Iter 2b adds the keyring path.
 //
-// Pre/post: see PRD-03 §store.go contract.
+// Pre/post: see PRD-03 §store.go contract. Empty region is a programming
+// error and panics; an unknown-but-nonempty region returns an error so
+// config-derived bad values don't crash the process.
 func LoadCredentials(_ context.Context, region, profile string) (Credentials, error) {
 	if region == "" {
-		return Credentials{}, errors.New("auth: region must not be empty")
+		panic("auth.LoadCredentials: region must not be empty (PRD-03 pre-condition)")
 	}
 	if profile == "" {
 		profile = "default"
@@ -57,7 +60,7 @@ func LoadCredentials(_ context.Context, region, profile string) (Credentials, er
 		return c, nil
 	}
 
-	f, _, err := defaultLocator().load()
+	f, _, err := loadDefaultConf()
 	if err != nil {
 		return Credentials{}, err
 	}
@@ -75,6 +78,9 @@ func LoadCredentials(_ context.Context, region, profile string) (Credentials, er
 //
 // Pre/post: see PRD-03 §store.go contract.
 func StoreCredentials(_ context.Context, region, profile string, creds Credentials) error {
+	if region == "" {
+		panic("auth.StoreCredentials: region must not be empty (PRD-03 pre-condition)")
+	}
 	if creds.IsZero() {
 		return errors.New("auth: cannot store zero Credentials")
 	}
@@ -86,7 +92,7 @@ func StoreCredentials(_ context.Context, region, profile string, creds Credentia
 	}
 	creds.Profile = profile
 
-	f, _, err := defaultLocator().load()
+	f, _, err := loadDefaultConf()
 	if err != nil {
 		return err
 	}
@@ -97,15 +103,20 @@ func StoreCredentials(_ context.Context, region, profile string, creds Credentia
 	return writeOvhConf(f)
 }
 
-// DeleteCredentials removes creds for region from ovh.conf. Idempotent:
-// returns nil when nothing exists for the region.
+// DeleteCredentials removes credentials for region from ovh.conf.
+//
+// Profile handling: phase 2b iter 2a treats each [region] section as a
+// single "default" profile. The profile argument is reserved for the
+// multi-profile expansion in iter 2b; today it is ignored, and the call
+// removes the entire section. Idempotent: returns nil when no section
+// exists.
 //
 // Pre/post: see PRD-03 §store.go contract.
 func DeleteCredentials(_ context.Context, region, _ string) error {
 	if region == "" {
-		return errors.New("auth: region must not be empty")
+		panic("auth.DeleteCredentials: region must not be empty (PRD-03 pre-condition)")
 	}
-	f, _, err := defaultLocator().load()
+	f, _, err := loadDefaultConf()
 	if err != nil {
 		return err
 	}

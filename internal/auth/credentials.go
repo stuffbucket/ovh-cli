@@ -41,6 +41,13 @@ type Credentials struct {
 
 // IsZero reports whether c equals the zero value, used to enforce the
 // "nil-error + zero Credentials is FORBIDDEN" contract on LoadCredentials.
+//
+// Note: this is a struct-equality comparison. time.Time fields with a
+// non-nil Location (e.g., the result of time.Time{}.UTC()) will NOT compare
+// equal to the bare zero time.Time. Callers that mean "no Expiry" must
+// leave Expiry at its zero value (do not apply .UTC()). Today this is
+// consistent: only successful OAuth2 token responses populate Expiry,
+// always to a non-zero time.
 func (c Credentials) IsZero() bool {
 	return c == Credentials{}
 }

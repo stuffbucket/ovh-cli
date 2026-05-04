@@ -10,19 +10,41 @@ import (
 	"github.com/stuffbucket/ovh-cli/internal/xdgpaths"
 )
 
-// sandbox isolates the test from the user's real $HOME / $XDG_CONFIG_HOME.
-// Returns the path where ovh.conf will be written by StoreCredentials.
+// envSandboxKeys lists the OVH_* vars that may leak in from a developer's
+// shell. sandbox() unsets them and restores at test end.
+var envSandboxKeys = []string{
+	"OVH_REGION",
+	"OVH_APPLICATION_KEY",
+	"OVH_APPLICATION_SECRET",
+	"OVH_CONSUMER_KEY",
+	"OVH_CLIENT_ID",
+	"OVH_CLIENT_SECRET",
+}
+
+// sandbox isolates the test from the user's real $HOME / $XDG_CONFIG_HOME /
+// OVH_* env. Returns the path where ovh.conf will be written by
+// StoreCredentials.
+//
+// MUTATES PROCESS-GLOBAL ENV. Tests using sandbox MUST NOT call t.Parallel().
 func sandbox(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	xdgConfig := filepath.Join(root, "config")
 	t.Setenv("HOME", root)
 	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
-	// Clear OVH_* vars that might be set in the developer's shell so they
-	// don't leak into LoadCredentials. t.Setenv restores at test end.
-	for _, k := range []string{"OVH_REGION", "OVH_APPLICATION_KEY", "OVH_APPLICATION_SECRET", "OVH_CONSUMER_KEY", "OVH_CLIENT_ID", "OVH_CLIENT_SECRET"} {
-		t.Setenv(k, "")
+
+	// t.Setenv("X", "") sets the var to empty, which is NOT the same as
+	// unset for callers that distinguish via os.LookupEnv. Use real unset
+	// + t.Cleanup to restore the original (or absence of) value.
+	for _, k := range envSandboxKeys {
+		if orig, ok := os.LookupEnv(k); ok {
+			t.Cleanup(func() { _ = os.Setenv(k, orig) })
+		} else {
+			t.Cleanup(func() { _ = os.Unsetenv(k) })
+		}
+		_ = os.Unsetenv(k)
 	}
+
 	xdgpaths.Reload()
 	t.Chdir(root)
 	return filepath.Join(xdgConfig, "ovh", "ovh.conf")
@@ -44,12 +66,14 @@ func TestLoadCredentials_UnknownRegion(t *testing.T) {
 	}
 }
 
-func TestLoadCredentials_EmptyRegion(t *testing.T) {
+func TestLoadCredentials_PanicsOnEmptyRegion(t *testing.T) {
 	sandbox(t)
-	_, err := LoadCredentials(context.Background(), "", "default")
-	if err == nil {
-		t.Fatal("expected error for empty region")
-	}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic on empty region")
+		}
+	}()
+	_, _ = LoadCredentials(context.Background(), "", "default")
 }
 
 func TestLoadCredentials_Env_ClassicCK(t *testing.T) {
@@ -82,7 +106,24 @@ func TestLoadCredentials_Env_RegionMismatchFallsThrough(t *testing.T) {
 	}
 }
 
-func TestStoreCredentials_RoundTrip(t *testing.T) {
+func TestLoadCredentials_EmptySection(t *testing.T) {
+	confPath := sandbox(t)
+	if err := os.MkdirAll(filepath.Dir(confPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Write a section header with no recognized keys; readCredsFromConf
+	// must treat this as "no creds" and LoadCredentials must return
+	// ErrNotConfigured rather than a non-zero Credentials with MethodNone.
+	if err := os.WriteFile(confPath, []byte("[ovh-eu]\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := LoadCredentials(context.Background(), "ovh-eu", "default")
+	if !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("got %v; want ErrNotConfigured for empty section", err)
+	}
+}
+
+func TestStoreCredentials_RoundTrip_ClassicCK(t *testing.T) {
 	confPath := sandbox(t)
 	want := Credentials{
 		Region:            "ovh-eu",
@@ -110,6 +151,33 @@ func TestStoreCredentials_RoundTrip(t *testing.T) {
 	}
 	if got.ApplicationKey != want.ApplicationKey || got.ConsumerKey != want.ConsumerKey {
 		t.Errorf("round-trip mismatch:\n got=%+v\nwant=%+v", got, want)
+	}
+	if got.Method != MethodConsumerKey {
+		t.Errorf("got.Method=%v want consumer_key", got.Method)
+	}
+}
+
+func TestStoreCredentials_RoundTrip_OAuth2(t *testing.T) {
+	sandbox(t)
+	want := Credentials{
+		Region:       "ovh-eu",
+		Profile:      "default",
+		Method:       MethodOAuth2,
+		ClientID:     "cid",
+		ClientSecret: "csecret",
+	}
+	if err := StoreCredentials(context.Background(), "ovh-eu", "default", want); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	got, err := LoadCredentials(context.Background(), "ovh-eu", "default")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Method != MethodOAuth2 {
+		t.Errorf("Method=%v want oauth2", got.Method)
+	}
+	if got.ClientID != "cid" || got.ClientSecret != "csecret" {
+		t.Errorf("OAuth2 fields not propagated: %+v", got)
 	}
 }
 
