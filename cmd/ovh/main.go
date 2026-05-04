@@ -14,10 +14,17 @@ import (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run is split out so deferred cleanup (signal handler, etc.) executes before
+// process exit. Calling os.Exit inside main would skip those defers.
+func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	if err := cli.Execute(ctx, os.Args[1:]); err != nil {
-		os.Exit(exitcode.From(err))
+		return exitcode.From(err)
 	}
+	return exitcode.OK
 }
