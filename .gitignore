@@ -1,0 +1,21 @@
+# Build artifacts
+/ovh
+/ovh-*
+/dist/
+coverage.out
+coverage.html
+*.test
+*.out
+
+# Editor
+*.swp
+*~
+.vscode/
+.idea/
+.DS_Store
+
+# Local-only secrets / overrides
+.env
+*.local
+ovh.conf
+hosts.yml
