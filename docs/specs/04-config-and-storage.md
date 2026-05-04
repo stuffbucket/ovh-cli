@@ -92,6 +92,44 @@ oauth_scopes = account:get
 
 **Storage selection**: `LoadCredentials` reads `[default].storage` from the same `ovh.conf` it's parsing — no `internal/config` dependency required. Default when unset: `"keyring"` (per PRD-04 §Canonical key registry).
 
+## Canonical hosts.yml schema
+
+`$XDG_CONFIG_HOME/ovh/hosts.yml` is the ovh-cli–specific OAuth2 token state file. It exists because `ovh.conf` is byte-compatible with `python-ovh` and python-ovh has no notion of OAuth2 access/refresh tokens or expiry — writing those to `ovh.conf` would scramble it for that audience. hosts.yml is OURS.
+
+YAML, mode 0600 (refuse-if-looser per file-mode registry above).
+
+```yaml
+version: 1
+hosts:
+  ovh-eu:
+    profiles:
+      default:
+        access_token: keyring:ovh-eu:default:access_token   # or plaintext when storage=file
+        refresh_token: keyring:ovh-eu:default:refresh_token # or plaintext when storage=file
+        expiry: "2026-05-09T12:00:00Z"
+        account: "ab12345-ovh"
+        last_validated_at: "2026-05-04T11:14:03Z"
+        scopes_granted: ["account:get"]
+      ci-bot:
+        access_token: ...
+        # ...
+  ovh-us:
+    profiles:
+      default:
+        # may be absent if no OAuth2 ever happened on this region
+```
+
+**Field semantics:**
+- `access_token`, `refresh_token`: secrets. Subject to the same placeholder grammar as `ovh.conf` — `keyring:<region>:<profile>:<key>` when `default.storage=keyring`, plaintext when `=file`.
+- `expiry`: RFC 3339 timestamp; the access_token's `exp`. Clients check this before each API call; refresh proactively when within 60s of expiry.
+- `account`: nichandle from the `/me` validation; same value as `<region>.account` (PRD-04 key registry).
+- `last_validated_at`: RFC 3339 timestamp of the last successful `/me` call.
+- `scopes_granted`: scopes the issuer actually granted (may differ from `<region>.oauth_scopes` requested).
+
+**Conflict resolution**: when `ovh.conf [region]` and `hosts.yml hosts.<region>.profiles.default` both carry a value for the same field, **hosts.yml wins** (PRD-03 §Storage). In practice `ovh.conf` carries the long-lived application credentials (`client_id`, `client_secret`) and hosts.yml carries the session state — no overlap.
+
+**When hosts.yml is written**: `StoreCredentials` writes to hosts.yml only when `creds.Method == MethodOAuth2` AND at least one of (AccessToken, RefreshToken, Expiry) is non-zero. Classic-CK creds never touch hosts.yml.
+
 ## Canonical key registry
 **Single source of truth** for every config key in the project. Other PRDs cite keys by name and link to this section; they do **not** redefine type, default, RW/RO, or enum values. New keys are added here first; only then may another PRD reference them.
 

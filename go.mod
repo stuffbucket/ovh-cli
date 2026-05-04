@@ -9,6 +9,7 @@ require (
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sync v0.20.0
 	gopkg.in/ini.v1 v1.67.2
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

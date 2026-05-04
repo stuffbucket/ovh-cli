@@ -74,6 +74,16 @@ func LoadCredentials(_ context.Context, region, profile string) (Credentials, er
 		return Credentials{}, ErrNotConfigured
 	}
 	c.Profile = profile
+
+	// OAuth2 session state lives in hosts.yml (PRD-04 §Canonical hosts.yml
+	// schema) — read it after ovh.conf so hosts.yml wins on overlap per
+	// PRD-03 §Storage. Iter 2c only reads OAuth2 fields; classic-CK creds
+	// never touch hosts.yml.
+	if c.Method == MethodOAuth2 {
+		if _, err := readHostsCreds(&c, region, profile); err != nil {
+			return Credentials{}, err
+		}
+	}
 	return c, nil
 }
 
@@ -109,10 +119,22 @@ func StoreCredentials(_ context.Context, region, profile string, creds Credentia
 	if f == nil {
 		f = ini.Empty()
 	}
-	if err := applyCreds(f, creds, storageMode(f)); err != nil {
+	storage := storageMode(f)
+	if err := applyCreds(f, creds, storage); err != nil {
 		return err
 	}
-	return writeOvhConf(f)
+	if err := writeOvhConf(f); err != nil {
+		return err
+	}
+	// OAuth2 session state goes to hosts.yml (PRD-04). Only relevant when
+	// the caller actually has OAuth2 token state to persist; classic-CK
+	// creds skip this path entirely.
+	if creds.Method == MethodOAuth2 && (creds.AccessToken != "" || creds.RefreshToken != "" || !creds.Expiry.IsZero()) {
+		if err := writeHostsCreds(creds, storage); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteCredentials removes credentials for (region, profile). Removes both
@@ -137,6 +159,10 @@ func DeleteCredentials(_ context.Context, region, profile string) error {
 
 	for _, sf := range secretFields {
 		_ = keyringDelete(region, profile, sf.key)
+	}
+
+	if err := deleteHostsCreds(region, profile); err != nil {
+		return err
 	}
 
 	f, _, err := loadDefaultConf()

@@ -82,10 +82,14 @@ func storageMode(f *ini.File) string {
 	return v
 }
 
-// readCredsFromConf extracts (region) credentials from f. Iter 2b: profile
-// is hardcoded to "default" because [region] sections are single-profile;
-// multi-profile coexistence in ovh.conf is iter 2c. Secret-bearing values
-// matching the placeholder grammar are resolved via the OS keyring.
+// readCredsFromConf extracts (region) credentials from f.
+//
+// ovh.conf [region] sections are NOT profile-scoped — they hold the long-
+// lived application credentials (AK/AS/CK, client_id, client_secret) that
+// are shared across profiles in the region. Per-profile session state
+// (access_token, refresh_token, expiry) lives in hosts.yml (PRD-04
+// §Canonical hosts.yml schema). Therefore the keyring placeholder in
+// ovh.conf is always profile="default" regardless of creds.Profile.
 func readCredsFromConf(f *ini.File, region string) (Credentials, error) {
 	if f == nil || !f.HasSection(region) {
 		return Credentials{}, nil
@@ -100,7 +104,8 @@ func readCredsFromConf(f *ini.File, region string) (Credentials, error) {
 		if v == "" {
 			continue
 		}
-		resolved, err := resolveSecret(v, region, creds.Profile, sf.key)
+		// ovh.conf placeholders are always default-profile-keyed (see doc above).
+		resolved, err := resolveSecret(v, region, "default", sf.key)
 		if err != nil {
 			return Credentials{}, err
 		}
@@ -156,18 +161,22 @@ func applyCreds(f *ini.File, creds Credentials, storage string) error {
 	setOrDelete(s, "application_key", creds.ApplicationKey)
 	setOrDelete(s, "client_id", creds.ClientID)
 
+	// ovh.conf is region-scoped (no profile dimension); long-lived
+	// application credentials are always keyed under profile="default" so
+	// multi-profile users share one app per region. See readCredsFromConf
+	// doc for the rationale.
 	for _, sf := range secretFields {
 		v := sf.get(&creds)
 		if v == "" {
-			_ = keyringDelete(creds.Region, creds.Profile, sf.key)
+			_ = keyringDelete(creds.Region, "default", sf.key)
 			s.DeleteKey(sf.key)
 			continue
 		}
 		if storage == storageKeyring {
-			if err := keyringSet(creds.Region, creds.Profile, sf.key, v); err != nil {
+			if err := keyringSet(creds.Region, "default", sf.key, v); err != nil {
 				return err
 			}
-			s.Key(sf.key).SetValue(makePlaceholder(creds.Region, creds.Profile, sf.key))
+			s.Key(sf.key).SetValue(makePlaceholder(creds.Region, "default", sf.key))
 		} else {
 			s.Key(sf.key).SetValue(v)
 		}
