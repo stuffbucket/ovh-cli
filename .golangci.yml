@@ -36,7 +36,7 @@ linters:
         # ($gostd) so they pass without further additions.
         layer-a-allowlist:
           files:
-            - '**/internal/schema/**/*.go'
+            - '**/internal/schema/**'
           list-mode: strict
           allow:
             - $gostd
@@ -50,7 +50,7 @@ linters:
         # them now means the allowlist doesn't need flag-day updates.
         internal-auth-allowlist:
           files:
-            - '**/internal/auth/**/*.go'
+            - '**/internal/auth/**'
           list-mode: strict
           allow:
             - $gostd
@@ -62,6 +62,7 @@ linters:
             - golang.org/x/term
             - golang.org/x/sync/singleflight
             - gopkg.in/ini.v1
+            - gopkg.in/yaml.v3
             - github.com/google/renameio/v2
             - github.com/stuffbucket/ovh-cli/internal/xdgpaths
 
