@@ -135,10 +135,16 @@ var (
 )
 
 // LoadCredentials reads creds following PRD-04 §Read precedence
-// (env -> flags -> ./ovh.conf -> ~/.ovh.conf -> $XDG_CONFIG_HOME/ovh/ovh.conf -> /etc/ovh.conf;
-// the OS keyring is consulted in lieu of the $XDG file when default.storage=keyring).
+// (env -> flags -> ./ovh.conf -> ~/.ovh.conf -> $XDG_CONFIG_HOME/ovh/ovh.conf -> /etc/ovh.conf).
+//
+// Storage backend selection: LoadCredentials reads `[default].storage` from
+// the same ovh.conf it's parsing — no internal/config dependency. When
+// storage=keyring, secret values matching `^keyring:` are resolved per
+// PRD-04 §Keyring placeholder grammar; when storage=file (or unset), values
+// are taken as plaintext.
 //
 // Pre:  ctx != nil; RegionByID(region) returns (_, true); profile != "".
+//       Empty region panics (programming error).
 // Post: nil error => returned Credentials is non-zero with .Region == region.
 //       Otherwise returned Credentials is the zero value AND error is one of the
 //       sentinels above. Nil-error + zero Credentials is FORBIDDEN.
@@ -153,9 +159,19 @@ func LoadCredentials(ctx context.Context, region, profile string) (Credentials, 
 //       (renameio.WriteFile semantics; parent dir fsync'd).
 func StoreCredentials(ctx context.Context, region, profile string, creds Credentials) error
 
-// DeleteCredentials removes creds for region/profile from both keyring and file fallback.
+// DeleteCredentials removes creds for (region, profile) from both keyring
+// and file fallback.
 //
-// Pre:  ctx != nil.
+// Profile semantics:
+//   - Iter 2a: each [region] section is treated as a single "default" profile;
+//     the profile parameter is ignored and the entire section is removed.
+//   - Iter 2b+: the profile parameter selects which profile's keyring entries
+//     and ovh.conf values to remove. Other profiles in the same region are
+//     untouched. Multi-profile support requires the keyring placeholder
+//     grammar from PRD-04 §Keyring placeholder grammar — keying by
+//     <region>:<profile>:<key> makes per-profile delete unambiguous.
+//
+// Pre:  ctx != nil; empty region panics (programming error).
 // Post: nil error => LoadCredentials(ctx, region, profile) returns ErrNotConfigured.
 //       Idempotent: calling on already-empty storage returns nil.
 func DeleteCredentials(ctx context.Context, region, profile string) error

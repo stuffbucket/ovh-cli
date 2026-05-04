@@ -63,6 +63,35 @@ oauth_scopes = account:get,/cloud/project/*
 ; not configured
 ```
 
+### Keyring placeholder grammar
+
+When `default.storage=keyring`, secret-bearing values in `ovh.conf` are written as **placeholders** of the form `keyring:<region>:<profile>:<key>` and the actual secret lives in the OS keyring. Format:
+
+- **Keyring service**: literal `"ovh-cli"` (the keyring service name; matches all stuffbucket binaries' shared convention).
+- **Keyring user (account)**: `"<region>:<profile>:<key>"` — colon-separated; `<region>` is a registry region id (`ovh-eu`, ...), `<profile>` is the credential profile name (default: `"default"`), `<key>` is the canonical key registry name without the `<region>.` prefix (`application_secret`, `consumer_key`, `client_secret`, `access_token`, `refresh_token`).
+- **Keyring value**: the raw secret string.
+
+Example `ovh.conf` with placeholders (the `application_key` and `client_id` are NOT secrets and stay plaintext):
+
+```ini
+[default]
+storage = keyring
+
+[ovh-eu]
+application_key = ABC123...
+application_secret = keyring:ovh-eu:default:application_secret
+consumer_key = keyring:ovh-eu:default:consumer_key
+client_id = oauth-client-id
+client_secret = keyring:ovh-eu:default:client_secret
+oauth_scopes = account:get
+```
+
+**Resolution algorithm**: when `LoadCredentials` reads a value matching the regex `^keyring:`, it calls `keyring.Get("ovh-cli", value[len("keyring:"):])` to fetch the secret. Errors:
+- `keyring.ErrNotFound` (placeholder exists but keyring entry is missing) → desync; surface as `auth.ErrNotConfigured` so callers re-run `ovh auth login`.
+- Keyring service unavailable (no dbus on Linux, locked Keychain on macOS) → `auth.ErrKeyringUnavailable`.
+
+**Storage selection**: `LoadCredentials` reads `[default].storage` from the same `ovh.conf` it's parsing — no `internal/config` dependency required. Default when unset: `"keyring"` (per PRD-04 §Canonical key registry).
+
 ## Canonical key registry
 **Single source of truth** for every config key in the project. Other PRDs cite keys by name and link to this section; they do **not** redefine type, default, RW/RO, or enum values. New keys are added here first; only then may another PRD reference them.
 
