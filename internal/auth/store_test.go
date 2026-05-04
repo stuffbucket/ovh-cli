@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/zalando/go-keyring"
+
 	"github.com/stuffbucket/ovh-cli/internal/xdgpaths"
 )
 
@@ -44,6 +46,12 @@ func sandbox(t *testing.T) string {
 		}
 		_ = os.Unsetenv(k)
 	}
+
+	// Replace the OS keyring with go-keyring's in-memory mock so tests
+	// don't touch the developer's real Keychain / Secret Service.
+	// MockInit() resets state on every call, so each sandbox gets a
+	// fresh empty keyring.
+	keyring.MockInit()
 
 	xdgpaths.Reload()
 	t.Chdir(root)
@@ -216,4 +224,121 @@ func TestDeleteCredentials_IdempotentOnEmpty(t *testing.T) {
 	if err := DeleteCredentials(context.Background(), "ovh-eu", "default"); err != nil {
 		t.Errorf("Delete on empty: got %v; want nil", err)
 	}
+}
+
+// TestStore_KeyringMode_OvhConfHasPlaceholders exercises the iter-2b
+// keyring backend: with default storage (keyring), ovh.conf carries
+// placeholders and the actual secret lives in the OS keyring.
+func TestStore_KeyringMode_OvhConfHasPlaceholders(t *testing.T) {
+	confPath := sandbox(t)
+	want := Credentials{
+		Region: "ovh-eu", Profile: "default", Method: MethodConsumerKey,
+		ApplicationKey: "ak", ApplicationSecret: "AS-SECRET", ConsumerKey: "CK-SECRET",
+	}
+	if err := StoreCredentials(context.Background(), "ovh-eu", "default", want); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	body, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("read ovh.conf: %v", err)
+	}
+	if !contains(body, "application_secret = keyring:ovh-eu:default:application_secret") {
+		t.Errorf("ovh.conf missing application_secret placeholder:\n%s", body)
+	}
+	if contains(body, "AS-SECRET") {
+		t.Error("ovh.conf leaked plaintext secret AS-SECRET (keyring mode)")
+	}
+
+	gotSecret, err := keyring.Get(keyringService, "ovh-eu:default:application_secret")
+	if err != nil || gotSecret != "AS-SECRET" {
+		t.Errorf("keyring application_secret=%q err=%v; want AS-SECRET", gotSecret, err)
+	}
+
+	// Round-trip: Load resolves placeholders back to plaintext values.
+	got, err := LoadCredentials(context.Background(), "ovh-eu", "default")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.ApplicationSecret != "AS-SECRET" || got.ConsumerKey != "CK-SECRET" {
+		t.Errorf("round-trip secrets mismatch: got=%+v want=%+v", got, want)
+	}
+}
+
+// TestStore_FileMode_OvhConfHasPlaintext: with [default].storage=file,
+// secrets are written plaintext (the python-ovh interop path).
+func TestStore_FileMode_OvhConfHasPlaintext(t *testing.T) {
+	confPath := sandbox(t)
+	// Pre-write [default] storage=file so applyCreds takes the file path.
+	if err := os.MkdirAll(filepath.Dir(confPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(confPath, []byte("[default]\nstorage = file\n"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	want := Credentials{
+		Region: "ovh-eu", Profile: "default", Method: MethodConsumerKey,
+		ApplicationKey: "ak", ApplicationSecret: "AS-PLAIN", ConsumerKey: "CK-PLAIN",
+	}
+	if err := StoreCredentials(context.Background(), "ovh-eu", "default", want); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	body, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !contains(body, "application_secret = AS-PLAIN") {
+		t.Errorf("ovh.conf missing plaintext application_secret in file mode:\n%s", body)
+	}
+	if contains(body, "keyring:") {
+		t.Errorf("ovh.conf has keyring placeholder in file mode:\n%s", body)
+	}
+}
+
+// TestLoad_MissingKeyringEntryDesync: placeholder exists but keyring
+// returns ErrNotFound — surface as ErrNotConfigured.
+func TestLoad_MissingKeyringEntryDesync(t *testing.T) {
+	confPath := sandbox(t)
+	if err := os.MkdirAll(filepath.Dir(confPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := "[default]\nstorage = keyring\n\n[ovh-eu]\nauth_method = consumer_key\napplication_key = ak\nconsumer_key = keyring:ovh-eu:default:consumer_key\n"
+	if err := os.WriteFile(confPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// keyring is empty (sandbox MockInit reset it). Load should surface
+	// the desync as ErrNotConfigured.
+	_, err := LoadCredentials(context.Background(), "ovh-eu", "default")
+	if !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("got %v; want ErrNotConfigured (placeholder/keyring desync)", err)
+	}
+}
+
+func TestDeleteCredentials_ClearsKeyringTooInKeyringMode(t *testing.T) {
+	sandbox(t)
+	c := Credentials{Region: "ovh-eu", Profile: "default", Method: MethodConsumerKey, ApplicationKey: "ak", ConsumerKey: "ck"}
+	if err := StoreCredentials(context.Background(), "ovh-eu", "default", c); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if err := DeleteCredentials(context.Background(), "ovh-eu", "default"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := keyring.Get(keyringService, "ovh-eu:default:consumer_key"); !errors.Is(err, keyring.ErrNotFound) {
+		t.Errorf("keyring still has consumer_key after Delete: %v", err)
+	}
+}
+
+func contains(haystack []byte, needle string) bool {
+	return len(needle) > 0 && stringIndex(string(haystack), needle) >= 0
+}
+
+func stringIndex(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }

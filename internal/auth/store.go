@@ -38,12 +38,14 @@ func readEnv(region string) Credentials {
 // env -> flags(handled by composition root) -> ./ovh.conf ->
 // ~/.ovh.conf -> $XDG_CONFIG_HOME/ovh/ovh.conf -> /etc/ovh.conf.
 //
-// Phase 2b iter 2a: keyring backend not yet wired — file is the only
-// persistent backend. Iter 2b adds the keyring path.
+// Storage backend selection: LoadCredentials reads [default].storage from
+// the same ovh.conf it parses for credentials. When storage=keyring,
+// secret values matching the placeholder grammar (PRD-04) are resolved
+// via the OS keyring; when storage=file (or unset and no file exists),
+// values are taken as plaintext.
 //
-// Pre/post: see PRD-03 §store.go contract. Empty region is a programming
-// error and panics; an unknown-but-nonempty region returns an error so
-// config-derived bad values don't crash the process.
+// Pre/post: see PRD-03 §store.go contract. Empty region panics
+// (programming error); unknown-but-nonempty region returns an error.
 func LoadCredentials(_ context.Context, region, profile string) (Credentials, error) {
 	if region == "" {
 		panic("auth.LoadCredentials: region must not be empty (PRD-03 pre-condition)")
@@ -64,7 +66,10 @@ func LoadCredentials(_ context.Context, region, profile string) (Credentials, er
 	if err != nil {
 		return Credentials{}, err
 	}
-	c := readCredsFromConf(f, region)
+	c, err := readCredsFromConf(f, region)
+	if err != nil {
+		return Credentials{}, err
+	}
 	if c.IsZero() {
 		return Credentials{}, ErrNotConfigured
 	}
@@ -74,7 +79,12 @@ func LoadCredentials(_ context.Context, region, profile string) (Credentials, er
 
 // StoreCredentials writes creds into the canonical
 // $XDG_CONFIG_HOME/ovh/ovh.conf, merging with any existing sections.
-// Atomic; mode 0600 per PRD-04 §Canonical file-mode registry.
+// Atomic; ovh.conf mode 0600 per PRD-04 §Canonical file-mode registry.
+//
+// When [default].storage=keyring (the default), secrets go to the OS
+// keyring and ovh.conf gets placeholders. When [default].storage=file,
+// secrets are written plaintext to ovh.conf. Keyring writes happen first
+// — if any fail, ovh.conf is left untouched and the previous state stands.
 //
 // Pre/post: see PRD-03 §store.go contract.
 func StoreCredentials(_ context.Context, region, profile string, creds Credentials) error {
@@ -99,23 +109,36 @@ func StoreCredentials(_ context.Context, region, profile string, creds Credentia
 	if f == nil {
 		f = ini.Empty()
 	}
-	applyCreds(f, creds)
+	if err := applyCreds(f, creds, storageMode(f)); err != nil {
+		return err
+	}
 	return writeOvhConf(f)
 }
 
-// DeleteCredentials removes credentials for region from ovh.conf.
+// DeleteCredentials removes credentials for (region, profile). Removes both
+// the keyring entries (per PRD-04 keyring grammar) and the ovh.conf section.
 //
-// Profile handling: phase 2b iter 2a treats each [region] section as a
-// single "default" profile. The profile argument is reserved for the
-// multi-profile expansion in iter 2b; today it is ignored, and the call
-// removes the entire section. Idempotent: returns nil when no section
-// exists.
+// Iter 2b semantics: profile is honored on the keyring side (entries keyed
+// by <region>:<profile>:<key> are removed), but the ovh.conf [region]
+// section is removed regardless. Multi-profile coexistence in ovh.conf is
+// iter 2c — at that point this function will only remove the named
+// profile's slice of [region].
+//
+// Idempotent on missing.
 //
 // Pre/post: see PRD-03 §store.go contract.
-func DeleteCredentials(_ context.Context, region, _ string) error {
+func DeleteCredentials(_ context.Context, region, profile string) error {
 	if region == "" {
 		panic("auth.DeleteCredentials: region must not be empty (PRD-03 pre-condition)")
 	}
+	if profile == "" {
+		profile = "default"
+	}
+
+	for _, sf := range secretFields {
+		_ = keyringDelete(region, profile, sf.key)
+	}
+
 	f, _, err := loadDefaultConf()
 	if err != nil {
 		return err
