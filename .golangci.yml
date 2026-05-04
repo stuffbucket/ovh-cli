@@ -50,6 +50,15 @@ linters:
           msg: 'internal/client must use only the auth.Credentials value type, not auth lifecycle/oauth functions (PRD-06 §Composition root)'
       analyze-types: true
 
+    errcheck:
+      # fmt.Fprint* writes to stdout/stderr in cobra commands; the only
+      # errors come from broken pipes, which we surface via os.Exit anyway.
+      # Enumerating the check at every call site is ceremony without value.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
     revive:
       rules:
         - name: unused-parameter

@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/stuffbucket/ovh-cli/internal/cli/completion"
+	"github.com/stuffbucket/ovh-cli/internal/cli/schema"
 	"github.com/stuffbucket/ovh-cli/internal/cli/version"
 )
 
@@ -34,6 +35,7 @@ func newRootCmd() *cobra.Command {
 	addGlobalFlags(cmd)
 	cmd.AddCommand(version.NewCmd())
 	cmd.AddCommand(completion.NewCmd())
+	cmd.AddCommand(schema.NewCmd())
 	return cmd
 }
 

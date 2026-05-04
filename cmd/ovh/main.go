@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -24,6 +25,11 @@ func run() int {
 	defer stop()
 
 	if err := cli.Execute(ctx, os.Args[1:]); err != nil {
+		// cobra is configured with SilenceErrors=true so it doesn't double-
+		// print; main owns the single user-facing error line. Phase 2b adds
+		// the structured "next:" hint and JSON-mode error envelope per
+		// PRD-01 §Errors.
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return exitcode.From(err)
 	}
 	return exitcode.OK
