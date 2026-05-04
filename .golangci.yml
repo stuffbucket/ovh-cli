@@ -72,6 +72,14 @@ linters:
       - path: '_test\.go'
         linters:
           - gosec
+      # The forbidigo rule below is targeted at internal/client/** to enforce
+      # the symbol-level confinement of internal/auth. Inside internal/auth
+      # itself, callers reference ValidateHost / LoadCredentials / etc. as
+      # bare identifiers; analyze-types:true resolves these to auth.X and
+      # the rule fires. Skip forbidigo on internal/auth.
+      - path: 'internal/auth/'
+        linters:
+          - forbidigo
 
 issues:
   max-issues-per-linter: 0

@@ -63,8 +63,8 @@ package auth
 type Region struct {
     ID                    string   // e.g. "ovh-eu"
     DisplayName           string   // e.g. "OVHcloud Europe"
-    EndpointConst         string   // go-ovh constant: "ovh-eu", "ovh-us", "ovh-ca", ...
-    PortalCreateAppURL    string
+    EndpointURL           string   // /1.0/ base URL, e.g. https://eu.api.ovh.com/1.0
+    PortalCreateAppURL    string   // where users mint AK/AS pairs
     OAuth2Issuer          string   // empty if OAuth2 not available for this region
     OAuth2DefaultScopes   []string
     ValidationHostPattern []string // exact-host equality list, see subsection above
