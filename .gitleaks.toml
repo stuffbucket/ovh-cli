@@ -1,0 +1,15 @@
+# gitleaks config for ovh-cli.
+#
+# Test fixtures must redact tokens to **** before commit; this allowlist
+# covers the directories where redacted samples will live (PRD-10
+# §Test data hygiene).
+
+title = "ovh-cli gitleaks config"
+
+[allowlist]
+description = "Redacted test fixtures"
+paths = [
+    '''testdata/golden/.*''',
+    '''internal/schema/testdata/.*''',
+    '''internal/client/clienttest/fixtures/.*''',
+]

@@ -1,0 +1,104 @@
+version: "2"
+
+# golangci-lint config for the ovh-cli project.
+#
+# The depguard rules below mechanically enforce the layer boundaries documented
+# in PRD-05 (Layer A allowlist), PRD-06 (composition root + cycle rules), and
+# PRD-08 (Canonical depguard ruleset). See docs/specs/.
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - depguard
+    - errcheck
+    - forbidigo
+    - gocritic
+    - gosec
+    - govet
+    - noctx
+    - revive
+    - staticcheck
+
+  settings:
+    depguard:
+      rules:
+        # Layer A (internal/schema) allowlist: see PRD-05.
+        layer-a-allowlist:
+          files:
+            - '**/internal/schema/**/*.go'
+          list-mode: strict
+          allow:
+            - $gostd
+            - golang.org/x/sync/errgroup
+            - github.com/tidwall/gjson
+            - github.com/google/renameio/v2
+            - github.com/ovh/go-ovh/ovh
+            - github.com/stuffbucket/ovh-cli/internal/xdgpaths
+
+        # internal/auth must not import internal/client (PRD-06 cycle rule).
+        no-back-edge-auth-to-client:
+          files:
+            - '**/internal/auth/**/*.go'
+          deny:
+            - pkg: github.com/stuffbucket/ovh-cli/internal/client
+              desc: 'internal/auth must not import internal/client (PRD-06)'
+
+        # OAuth2/keyring/browser/x-term confined to internal/auth (PRD-08).
+        sensitive-deps-confined-to-auth:
+          files:
+            - '!**/internal/auth/**/*.go'
+            - '!**/cmd/ovh/**/*.go'
+          deny:
+            - pkg: golang.org/x/oauth2
+              desc: 'x/oauth2 confined to internal/auth (PRD-08 §Canonical depguard ruleset)'
+            - pkg: github.com/zalando/go-keyring
+              desc: 'go-keyring confined to internal/auth (PRD-08)'
+            - pkg: github.com/cli/browser
+              desc: 'cli/browser confined to internal/auth (PRD-08)'
+            - pkg: golang.org/x/term
+              desc: 'x/term confined to internal/auth (PRD-08)'
+
+        # go-ovh confined to internal/{auth,client,schema} (PRD-08).
+        go-ovh-confined:
+          files:
+            - '!**/internal/auth/**/*.go'
+            - '!**/internal/client/**/*.go'
+            - '!**/internal/schema/**/*.go'
+          deny:
+            - pkg: github.com/ovh/go-ovh/ovh
+              desc: 'go-ovh confined to internal/{auth,client,schema} (PRD-08)'
+
+        # adrg/xdg confined to internal/xdgpaths (PRD-08).
+        xdg-confined:
+          files:
+            - '!**/internal/xdgpaths/**/*.go'
+          deny:
+            - pkg: github.com/adrg/xdg
+              desc: 'adrg/xdg confined to internal/xdgpaths (PRD-08)'
+
+        # gopkg.in/ini.v1 confined to internal/config (PRD-08).
+        ini-confined:
+          files:
+            - '!**/internal/config/**/*.go'
+          deny:
+            - pkg: gopkg.in/ini.v1
+              desc: 'ini.v1 confined to internal/config (PRD-08)'
+
+    forbidigo:
+      # Symbol-level rule: internal/client may import internal/auth's package
+      # (for the Credentials value type) but must NOT call auth's lifecycle
+      # or oauth functions. PRD-06 §Canonical package registry.
+      forbid:
+        - pattern: 'auth\.(LoadCredentials|StoreCredentials|DeleteCredentials|RefreshOAuth2|NewPKCE|RandomState|LoopbackListen|ExchangePKCE|ValidateHost)'
+          msg: 'internal/client must use only the auth.Credentials value type, not auth lifecycle/oauth functions (PRD-06 §Composition root)'
+      analyze-types: true
+
+    revive:
+      rules:
+        - name: unused-parameter
+          disabled: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
