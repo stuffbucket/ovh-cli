@@ -3,6 +3,9 @@
 github.com/adrg/xdg
 github.com/adrg/xdg/internal/pathutil
 github.com/adrg/xdg/internal/userdirs
+# github.com/cli/browser v1.3.0
+## explicit; go 1.21
+github.com/cli/browser
 # github.com/danieljoos/wincred v1.2.3
 ## explicit; go 1.18
 github.com/danieljoos/wincred
@@ -15,6 +18,9 @@ github.com/google/renameio/v2
 # github.com/inconshreveable/mousetrap v1.1.0
 ## explicit; go 1.18
 github.com/inconshreveable/mousetrap
+# github.com/ovh/go-ovh v1.9.0
+## explicit; go 1.18
+github.com/ovh/go-ovh/ovh
 # github.com/spf13/cobra v1.10.2
 ## explicit; go 1.15
 github.com/spf13/cobra
@@ -29,6 +35,7 @@ github.com/zalando/go-keyring/secret_service
 # golang.org/x/oauth2 v0.36.0
 ## explicit; go 1.25.0
 golang.org/x/oauth2
+golang.org/x/oauth2/clientcredentials
 golang.org/x/oauth2/internal
 # golang.org/x/sync v0.20.0
 ## explicit; go 1.25.0

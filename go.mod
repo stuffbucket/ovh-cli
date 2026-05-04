@@ -4,7 +4,9 @@ go 1.26.1
 
 require (
 	github.com/adrg/xdg v0.5.3
+	github.com/cli/browser v1.3.0
 	github.com/google/renameio/v2 v2.0.2
+	github.com/ovh/go-ovh v1.9.0
 	github.com/spf13/cobra v1.10.2
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/oauth2 v0.36.0
