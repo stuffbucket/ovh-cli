@@ -28,6 +28,12 @@ const (
 // Production (cobra) supplies a huh-backed prompt; tests supply a stub.
 type AskAKAS func(ctx context.Context) (ak, as string, err error)
 
+// openBrowser is the browser-open hook. Production: browser.OpenURL.
+// Tests swap to a no-op via t.Cleanup (CI runners are headless and
+// xdg-open would fail). Package-level mutable var keeps the production
+// signature simple at the cost of one shared test seam.
+var openBrowser = browser.OpenURL
+
 // RunConsumerKeyFlow drives the classic AK/AS/CK validation flow.
 // PRD-03 §flow.go for the full contract.
 func RunConsumerKeyFlow(ctx context.Context, region Region, profile string, askAKAS AskAKAS) (Credentials, error) {
@@ -51,7 +57,7 @@ func RunConsumerKeyFlow(ctx context.Context, region Region, profile string, askA
 	if ak == "" && as == "" {
 		// PRD-03 §flow.go step 1: open portal first so user can mint creds,
 		// then re-prompt.
-		if err := browser.OpenURL(region.PortalCreateAppURL); err != nil {
+		if err := openBrowser(region.PortalCreateAppURL); err != nil {
 			return Credentials{}, fmt.Errorf("auth: open portal: %w", err)
 		}
 		ak, as, err = askAKAS(ctx)
@@ -71,7 +77,7 @@ func RunConsumerKeyFlow(ctx context.Context, region Region, profile string, askA
 	if err := ValidateHost(credResp.ValidationURL, region.ValidationHostPattern); err != nil {
 		return Credentials{}, fmt.Errorf("auth: validation URL rejected: %w", err)
 	}
-	if err := browser.OpenURL(credResp.ValidationURL); err != nil {
+	if err := openBrowser(credResp.ValidationURL); err != nil {
 		return Credentials{}, fmt.Errorf("auth: open validation URL: %w", err)
 	}
 

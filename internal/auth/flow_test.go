@@ -80,6 +80,17 @@ func stubAskAKAS(ak, as string) AskAKAS {
 	return func(_ context.Context) (string, string, error) { return ak, as, nil }
 }
 
+// noBrowser swaps openBrowser to a no-op for the duration of the test.
+// CI runners have no browser installed (xdg-open: www-browser: not found)
+// and tests don't actually need one — /me poll triggers validation success
+// via the test mux.
+func noBrowser(t *testing.T) {
+	t.Helper()
+	orig := openBrowser
+	t.Cleanup(func() { openBrowser = orig })
+	openBrowser = func(string) error { return nil }
+}
+
 // regionFor returns a Region wired to srv's URL.
 func regionFor(srv *httptest.Server) Region {
 	u, _ := url.Parse(srv.URL)
@@ -92,9 +103,7 @@ func regionFor(srv *httptest.Server) Region {
 }
 
 func TestRunConsumerKeyFlow_HappyPath(t *testing.T) {
-	// browser.OpenURL is OS-dependent; we can't avoid it triggering, but
-	// it'll fail silently on a CI host with no GUI. The test cares only
-	// about the network flow, not the browser.
+	noBrowser(t)
 	cks := newClassicCKServer(t, 1) // /me returns 403 once, then 200
 	defer cks.Close()
 	trustedClient(t, cks.Server)
@@ -116,6 +125,7 @@ func TestRunConsumerKeyFlow_HappyPath(t *testing.T) {
 }
 
 func TestRunConsumerKeyFlow_RejectsEmptyCreds(t *testing.T) {
+	noBrowser(t)
 	region := Region{ID: "test", EndpointURL: "https://127.0.0.1:1", PortalCreateAppURL: "https://127.0.0.1:1/", ValidationHostPattern: []string{"127.0.0.1:1"}}
 	// askAKAS returns empty both times -> error after the second prompt.
 	calls := 0
@@ -161,6 +171,7 @@ func TestRunConsumerKeyFlow_AskAKASRequired(t *testing.T) {
 }
 
 func TestRunConsumerKeyFlow_PostFailureSurfaces(t *testing.T) {
+	noBrowser(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/credential", func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, `{"error":"bad ak"}`, http.StatusForbidden)
@@ -177,6 +188,7 @@ func TestRunConsumerKeyFlow_PostFailureSurfaces(t *testing.T) {
 }
 
 func TestRunConsumerKeyFlow_PollTimeout(t *testing.T) {
+	noBrowser(t)
 	// preValidationCalls = high so /me never returns 200 within the test.
 	cks := newClassicCKServer(t, 1000)
 	defer cks.Close()
