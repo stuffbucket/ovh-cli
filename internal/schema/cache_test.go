@@ -155,11 +155,15 @@ func TestQuerier_Describe(t *testing.T) {
 	}
 }
 
+// fixturePathCount is the number of paths declared in
+// testdata/apispace.json. Update if the fixture changes.
+const fixturePathCount = 3
+
 func TestQuerier_Paths(t *testing.T) {
 	q := loadFixture(t)
 	paths := q.Paths()
-	if len(paths) != 3 {
-		t.Fatalf("Paths len=%d want 3 (got %v)", len(paths), paths)
+	if len(paths) != fixturePathCount {
+		t.Fatalf("Paths len=%d want %d (got %v)", len(paths), fixturePathCount, paths)
 	}
 }
 

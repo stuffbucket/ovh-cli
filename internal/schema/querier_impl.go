@@ -7,8 +7,8 @@ import (
 )
 
 // cachedQuerier satisfies Querier. Constructed only by openCacheAt, which
-// guarantees services is non-nil and parsed (any decode failure becomes
-// ErrCacheCorrupt at open time, never at query time).
+// guarantees both services and now are non-nil at construction; the methods
+// below assume that invariant and do not paper over it with late nil checks.
 type cachedQuerier struct {
 	meta     Meta
 	services map[string]Service
@@ -19,11 +19,7 @@ func (q *cachedQuerier) Region() string       { return q.meta.Region }
 func (q *cachedQuerier) FetchedAt() time.Time { return q.meta.FetchedAt }
 
 func (q *cachedQuerier) Stale() bool {
-	now := time.Now
-	if q.now != nil {
-		now = q.now
-	}
-	return now().Sub(q.meta.FetchedAt) > CacheTTL
+	return q.now().Sub(q.meta.FetchedAt) > DefaultCacheTTL
 }
 
 func (q *cachedQuerier) HasPath(method, path string) bool {
@@ -48,23 +44,24 @@ func (q *cachedQuerier) lookupPath(path string) (PathSpec, bool) {
 	return nil, false
 }
 
-func (q *cachedQuerier) Paths() []string {
-	out := make([]string, 0, len(q.services)*4) // 4 paths/service is a coarse but reasonable hint
+// Paths returns every path declared in the cache, sorted ascending.
+func (q *cachedQuerier) Paths() []string { return q.collectPaths("") }
+
+// Search returns paths whose names start with prefix, sorted ascending.
+// Empty result => nil. PRD-05 §Querier interface.
+func (q *cachedQuerier) Search(prefix string) []string { return q.collectPaths(prefix) }
+
+// collectPaths walks services once, filters by optional prefix, sorts ascending.
+// Empty prefix means "all paths".
+func (q *cachedQuerier) collectPaths(prefix string) []string {
+	var out []string
 	for _, svc := range q.services {
 		for p := range svc.Paths {
-			out = append(out, p)
+			if prefix == "" || strings.HasPrefix(p, prefix) {
+				out = append(out, p)
+			}
 		}
 	}
 	sort.Strings(out)
-	return out
-}
-
-func (q *cachedQuerier) Search(prefix string) []string {
-	var out []string
-	for _, p := range q.Paths() {
-		if strings.HasPrefix(p, prefix) {
-			out = append(out, p)
-		}
-	}
 	return out
 }

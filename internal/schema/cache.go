@@ -12,10 +12,12 @@ import (
 	"github.com/stuffbucket/ovh-cli/internal/xdgpaths"
 )
 
-// CacheTTL is the freshness window beyond which Querier.Stale() reports true.
-// PRD-04 key registry exposes this as default.cache_ttl_hours; phase 2b wires
-// the config value through. Phase 2a hard-codes the default.
-const CacheTTL = 24 * time.Hour
+// DefaultCacheTTL is the freshness window beyond which Querier.Stale() reports
+// true when no runtime override is supplied. PRD-04 §Canonical key registry
+// exposes the override as default.cache_ttl_hours; phase 2b wires the config
+// value through. The "Default" prefix signals that this is the fallback, not
+// the final policy — callers in phase 2 will pass an effective TTL down.
+const DefaultCacheTTL = 24 * time.Hour
 
 // OpenCache opens the cached apispace.json for the given region read-only.
 //
