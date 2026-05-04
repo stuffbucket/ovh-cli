@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/renameio/v2"
 
@@ -16,7 +17,9 @@ import (
 )
 
 // Refresh re-fetches the API description for region and atomically rewrites
-// apispace.json + apispace.meta.json.
+// apispace.json + apispace.meta.json. When the upstream returns 304 Not
+// Modified (the on-disk ETag matches), apispace.json is left unchanged and
+// only apispace.meta.json's FetchedAt is updated.
 //
 // Pre:  ctx != nil; region != ""; endpoint != ""; len(allowedHosts) > 0 —
 //
@@ -54,10 +57,25 @@ func refreshFrom(ctx context.Context, region, endpoint string, allowedHosts []st
 		panic("schema.Refresh: allowedHosts must be non-empty (PRD-05 threat model)")
 	}
 
-	as, err := fetchAPISpace(ctx, region, endpoint, allowedHosts, transport)
+	prevETag := readPreviousETag(dir)
+	result, err := fetchAPISpace(ctx, region, endpoint, allowedHosts, transport, prevETag)
 	if err != nil {
 		return err
 	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("schema: mkdir cache: %w", err)
+	}
+	if !result.Modified {
+		// 304 path: leave apispace.json untouched; only bump FetchedAt
+		// (and ETag, if upstream sent one) in apispace.meta.json.
+		return rewriteMetaFetchedAt(dir, result.ETag)
+	}
+	return writeFresh(dir, result.Space)
+}
+
+// writeFresh marshals as into apispace.json and writes the matching
+// apispace.meta.json. Atomic per renameio.
+func writeFresh(dir string, as *APISpace) error {
 	hash, err := schemaHash(as.Services)
 	if err != nil {
 		return err
@@ -67,9 +85,6 @@ func refreshFrom(ctx context.Context, region, endpoint string, allowedHosts []st
 	body, err := json.MarshalIndent(as, "", "  ")
 	if err != nil {
 		return fmt.Errorf("schema: marshal apispace: %w", err)
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("schema: mkdir cache: %w", err)
 	}
 	// PRD-04 §Canonical file-mode registry: apispace.json mode 0644.
 	if err := renameio.WriteFile(filepath.Join(dir, "apispace.json"), body, 0o644); err != nil {
@@ -90,6 +105,44 @@ func refreshFrom(ctx context.Context, region, endpoint string, allowedHosts []st
 		return fmt.Errorf("schema: write apispace.meta.json: %w", err)
 	}
 	return nil
+}
+
+// readPreviousETag returns the ETag from apispace.meta.json or "" when no
+// prior meta exists or it's unreadable. Errors are treated as "no etag" so
+// the next call refetches from scratch.
+func readPreviousETag(dir string) string {
+	b, err := os.ReadFile(filepath.Join(dir, "apispace.meta.json")) // #nosec G304 -- xdgpaths-derived
+	if err != nil {
+		return ""
+	}
+	var m Meta
+	if err := json.Unmarshal(b, &m); err != nil {
+		return ""
+	}
+	return m.ETag
+}
+
+// rewriteMetaFetchedAt updates apispace.meta.json's FetchedAt (and ETag, if
+// non-empty) without touching apispace.json. Used on the 304 path.
+func rewriteMetaFetchedAt(dir, etag string) error {
+	metaPath := filepath.Join(dir, "apispace.meta.json")
+	b, err := os.ReadFile(metaPath) // #nosec G304 -- xdgpaths-derived
+	if err != nil {
+		return fmt.Errorf("schema: read meta for refresh: %w", err)
+	}
+	var m Meta
+	if err := json.Unmarshal(b, &m); err != nil {
+		return fmt.Errorf("schema: parse meta: %w", err)
+	}
+	m.FetchedAt = time.Now().UTC()
+	if etag != "" {
+		m.ETag = etag
+	}
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("schema: marshal meta: %w", err)
+	}
+	return renameio.WriteFile(metaPath, out, 0o644)
 }
 
 // schemaHash hashes a stable JSON serialization of services. encoding/json

@@ -11,9 +11,10 @@ import (
 	"testing"
 )
 
-// newSchemaServer returns an httptest.Server that serves the fetch_*.json
-// fixtures at /1.0/. Path /1.0/?format=json -> fetch_index.json; per-service
-// /1.0/<svc>?format=json -> fetch_service_<svc>.json.
+// newSchemaServer returns an httptest.NewTLSServer that serves the
+// fetch_*.json fixtures at /1.0/. /1.0/ -> fetch_index.json; per-service
+// /1.0/<svc>?format=json -> fetch_service_<svc>.json. Services in
+// badServices return 500.
 func newSchemaServer(t *testing.T, badServices ...string) *httptest.Server {
 	t.Helper()
 	bad := setOf(badServices)
@@ -26,6 +27,28 @@ func newSchemaServer(t *testing.T, badServices ...string) *httptest.Server {
 		}
 		if _, fail := bad[path]; fail {
 			http.Error(w, "fixture: forced failure", http.StatusInternalServerError)
+			return
+		}
+		writeFixture(t, w, "fetch_service"+strings.ReplaceAll(path, "/", "_")+".json")
+	})
+	return httptest.NewTLSServer(mux)
+}
+
+// newSchemaServerWithETag returns a server that responds 200 + ETag the
+// first time and 304 when the request's If-None-Match equals etag. Per-
+// service GETs always return 200; ETag handling is index-only (PRD-05).
+func newSchemaServerWithETag(t *testing.T, etag string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/1.0/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/1.0")
+		if path == "" || path == "/" {
+			w.Header().Set("ETag", etag)
+			if r.Header.Get("If-None-Match") == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			writeFixture(t, w, "fetch_index.json")
 			return
 		}
 		writeFixture(t, w, "fetch_service"+strings.ReplaceAll(path, "/", "_")+".json")
@@ -51,17 +74,20 @@ func TestFetchAPISpace_HappyPath(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	tr := srv.Client().Transport
 
-	as, err := fetchAPISpace(context.Background(), "test", srv.URL+"/1.0", []string{u.Host}, tr)
+	res, err := fetchAPISpace(context.Background(), "test", srv.URL+"/1.0", []string{u.Host}, tr, "")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	if as.Region != "test" {
-		t.Errorf("Region=%q want test", as.Region)
+	if !res.Modified {
+		t.Fatal("Modified=false on first fetch")
 	}
-	if got, want := len(as.Services), 2; got != want {
+	if res.Space.Region != "test" {
+		t.Errorf("Region=%q want test", res.Space.Region)
+	}
+	if got, want := len(res.Space.Services), 2; got != want {
 		t.Fatalf("services count=%d want %d", got, want)
 	}
-	cloud, ok := as.Services["/cloud"]
+	cloud, ok := res.Space.Services["/cloud"]
 	if !ok {
 		t.Fatal("/cloud service missing")
 	}
@@ -77,14 +103,14 @@ func TestFetchAPISpace_HostNotAllowed(t *testing.T) {
 	srv := newSchemaServer(t)
 	defer srv.Close()
 	tr := srv.Client().Transport
-	_, err := fetchAPISpace(context.Background(), "test", srv.URL+"/1.0", []string{"not-the-host.example"}, tr)
+	_, err := fetchAPISpace(context.Background(), "test", srv.URL+"/1.0", []string{"not-the-host.example"}, tr, "")
 	if err == nil || !strings.Contains(err.Error(), "not in allowedHosts") {
 		t.Fatalf("got %v; want allowedHosts rejection", err)
 	}
 }
 
 func TestFetchAPISpace_NonHTTPSEndpointRejected(t *testing.T) {
-	_, err := fetchAPISpace(context.Background(), "test", "http://insecure.example/1.0", []string{"insecure.example"}, nil)
+	_, err := fetchAPISpace(context.Background(), "test", "http://insecure.example/1.0", []string{"insecure.example"}, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "not https") {
 		t.Fatalf("got %v; want https rejection", err)
 	}
@@ -95,14 +121,14 @@ func TestFetchAPISpace_PerServiceFailureNonFatal(t *testing.T) {
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
 	tr := srv.Client().Transport
-	as, err := fetchAPISpace(context.Background(), "test", srv.URL+"/1.0", []string{u.Host}, tr)
+	res, err := fetchAPISpace(context.Background(), "test", srv.URL+"/1.0", []string{u.Host}, tr, "")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	if as.Services["/me"].Error == "" {
+	if res.Space.Services["/me"].Error == "" {
 		t.Error("/me should have error recorded")
 	}
-	if cloud := as.Services["/cloud"]; cloud.Error != "" {
+	if cloud := res.Space.Services["/cloud"]; cloud.Error != "" {
 		t.Errorf("/cloud should have succeeded, got error: %q", cloud.Error)
 	}
 }
@@ -114,8 +140,30 @@ func TestFetchAPISpace_CancelledContext(t *testing.T) {
 	tr := srv.Client().Transport
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := fetchAPISpace(ctx, "test", srv.URL+"/1.0", []string{u.Host}, tr)
+	_, err := fetchAPISpace(ctx, "test", srv.URL+"/1.0", []string{u.Host}, tr, "")
 	if err == nil {
 		t.Fatal("fetch should fail on cancelled ctx")
+	}
+}
+
+func TestFetchAPISpace_ETagNotModified(t *testing.T) {
+	const etag = `W/"v1"`
+	srv := newSchemaServerWithETag(t, etag)
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	tr := srv.Client().Transport
+
+	res, err := fetchAPISpace(context.Background(), "test", srv.URL+"/1.0", []string{u.Host}, tr, etag)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if res.Modified {
+		t.Error("Modified=true on matching If-None-Match; want 304 path")
+	}
+	if res.Space != nil {
+		t.Error("Space non-nil on 304 path")
+	}
+	if res.ETag != etag {
+		t.Errorf("ETag=%q want %q", res.ETag, etag)
 	}
 }

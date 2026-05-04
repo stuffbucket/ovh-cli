@@ -1,12 +1,15 @@
 package schema
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRefreshFrom_HappyPath(t *testing.T) {
@@ -50,6 +53,11 @@ func TestRefreshFrom_PanicsOnEmptyRegion(t *testing.T) {
 	_ = refreshFrom(context.Background(), "", "https://example/1.0", []string{"example"}, t.TempDir(), nil)
 }
 
+func TestRefreshFrom_PanicsOnEmptyEndpoint(t *testing.T) {
+	defer expectPanic(t, "endpoint")
+	_ = refreshFrom(context.Background(), "test", "", []string{"example"}, t.TempDir(), nil)
+}
+
 func TestRefreshFrom_PanicsOnNilContext(t *testing.T) {
 	defer expectPanic(t, "ctx")
 	//nolint:staticcheck // intentionally passing nil ctx to trigger the documented panic
@@ -57,12 +65,7 @@ func TestRefreshFrom_PanicsOnNilContext(t *testing.T) {
 }
 
 func TestRefreshFrom_AtomicOnFetchFailure(t *testing.T) {
-	// Set up a cache dir with valid pre-existing files.
 	dir := copyFixture(t)
-
-	// Point Refresh at an unreachable endpoint; assertHostAllowed succeeds
-	// (host matches) but the actual HTTP call fails. Existing files should
-	// be untouched.
 	preMeta, _ := os.ReadFile(filepath.Join(dir, "apispace.meta.json"))
 	preSpec, _ := os.ReadFile(filepath.Join(dir, "apispace.json"))
 
@@ -73,18 +76,70 @@ func TestRefreshFrom_AtomicOnFetchFailure(t *testing.T) {
 
 	postMeta, _ := os.ReadFile(filepath.Join(dir, "apispace.meta.json"))
 	postSpec, _ := os.ReadFile(filepath.Join(dir, "apispace.json"))
-
-	if string(preMeta) != string(postMeta) {
+	if !bytes.Equal(preMeta, postMeta) {
 		t.Error("apispace.meta.json mutated on failed Refresh")
 	}
-	if string(preSpec) != string(postSpec) {
+	if !bytes.Equal(preSpec, postSpec) {
 		t.Error("apispace.json mutated on failed Refresh")
 	}
 }
 
-func TestRefresh_PanicsOnEmptyEndpoint(t *testing.T) {
-	defer expectPanic(t, "endpoint")
-	_ = refreshFrom(context.Background(), "test", "", []string{"example"}, t.TempDir(), nil)
+// TestRefreshFrom_ETagRoundTrip exercises the PRD-05 §Fetch contract:
+// "Honor If-None-Match from previous etag; on 304, skip merge and bump
+// fetched_at." The first refresh primes the cache with a server-supplied
+// ETag; the second refresh should hit the 304 path, leave apispace.json
+// byte-identical, and only advance FetchedAt in apispace.meta.json.
+func TestRefreshFrom_ETagRoundTrip(t *testing.T) {
+	const etag = `W/"v1"`
+	srv := newSchemaServerWithETag(t, etag)
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	tr := srv.Client().Transport
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	if err := refreshFrom(context.Background(), "test", srv.URL+"/1.0", []string{u.Host}, dir, tr); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	firstSpec, _ := os.ReadFile(filepath.Join(dir, "apispace.json"))
+	firstMeta := readMetaForTest(t, dir)
+	if firstMeta.ETag != etag {
+		t.Fatalf("first.ETag=%q want %q", firstMeta.ETag, etag)
+	}
+
+	// Sleep a beat so FetchedAt can advance even on coarse clocks.
+	time.Sleep(10 * time.Millisecond)
+
+	if err := refreshFrom(context.Background(), "test", srv.URL+"/1.0", []string{u.Host}, dir, tr); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	secondSpec, _ := os.ReadFile(filepath.Join(dir, "apispace.json"))
+	secondMeta := readMetaForTest(t, dir)
+
+	if !bytes.Equal(firstSpec, secondSpec) {
+		t.Error("apispace.json mutated on 304 response")
+	}
+	if !secondMeta.FetchedAt.After(firstMeta.FetchedAt) {
+		t.Errorf("FetchedAt did not advance: first=%v second=%v", firstMeta.FetchedAt, secondMeta.FetchedAt)
+	}
+	if secondMeta.ETag != etag {
+		t.Errorf("second.ETag=%q want %q (304 path should preserve)", secondMeta.ETag, etag)
+	}
+}
+
+func readMetaForTest(t *testing.T, dir string) Meta {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "apispace.meta.json"))
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	var m Meta
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("parse meta: %v", err)
+	}
+	return m
 }
 
 func expectPanic(t *testing.T, wantSubstr string) {
