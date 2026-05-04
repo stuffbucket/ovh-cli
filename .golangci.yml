@@ -38,6 +38,15 @@ linters:
         - name: unused-parameter
           disabled: true
 
+  exclusions:
+    rules:
+      # Test files that exercise the refuse-if-looser file-mode rule (PRD-10
+      # §Property / contract tests) need to chmod fixtures to deliberately
+      # wrong permissions; gosec G302 fires on every such call.
+      - path: '_test\.go'
+        linters:
+          - gosec
+
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

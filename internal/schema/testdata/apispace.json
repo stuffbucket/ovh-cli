@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "region": "ovh-eu",
+  "fetched_at": "2026-05-04T00:00:00Z",
+  "etag": "W/\"abc123\"",
+  "schema_hash": "sha256:test-fixture",
+  "services": {
+    "/cloud": {
+      "description": "Cloud Project APIs",
+      "paths": {
+        "/cloud/project": {
+          "GET": {
+            "description": "List cloud projects",
+            "auth": ["account:get"]
+          }
+        },
+        "/cloud/project/{serviceName}/instance": {
+          "GET": {
+            "description": "List instances",
+            "auth": ["account:get"]
+          },
+          "POST": {
+            "description": "Create instance",
+            "auth": ["account:get"]
+          }
+        }
+      }
+    },
+    "/me": {
+      "description": "Account APIs",
+      "paths": {
+        "/me": {
+          "GET": {
+            "description": "Get account info",
+            "auth": ["account:get"]
+          }
+        }
+      }
+    }
+  }
+}
