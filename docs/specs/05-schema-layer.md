@@ -114,7 +114,7 @@ func OpenCache(region string) (Querier, error)
 // Refresh re-fetches the API description for the region and atomically
 // rewrites apispace.json + apispace.meta.json.
 //
-// Pre:  ctx != nil; region != ""; len(allowedHosts) > 0 — empty allowlist is a
+// Pre:  ctx != nil; region != ""; endpoint != ""; len(allowedHosts) > 0 — empty allowlist is a
 //       programming error (would silently accept any HTTPS host) and triggers a
 //       runtime panic, NOT an error return. allowedHosts is injected from the
 //       composition root (see Threat model below; PRD-06 §Composition root).
@@ -122,7 +122,7 @@ func OpenCache(region string) (Querier, error)
 //       Stale()==false and FetchedAt() within this call's wall-clock window.
 //       Non-nil error => previously cached files are unchanged
 //       (atomic-write contract per PRD-04 §Atomic writes).
-func Refresh(ctx context.Context, region string, allowedHosts []string) error
+func Refresh(ctx context.Context, region, endpoint string, allowedHosts []string) error
 ```
 
 ## Commands (Layer B surface for Layer A)

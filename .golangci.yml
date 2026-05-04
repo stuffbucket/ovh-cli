@@ -17,6 +17,7 @@ linters:
   default: none
   enable:
     - bodyclose
+    - depguard
     - errcheck
     - forbidigo
     - gocritic
@@ -27,6 +28,22 @@ linters:
     - staticcheck
 
   settings:
+    depguard:
+      rules:
+        # Layer A allowlist: internal/schema may import only the packages
+        # listed below. PRD-05 §Module layout. Strict mode rejects anything
+        # not on the allow list. Tests in internal/schema use stdlib only
+        # ($gostd) so they pass without further additions.
+        layer-a-allowlist:
+          files:
+            - '**/internal/schema/**/*.go'
+          list-mode: strict
+          allow:
+            - $gostd
+            - golang.org/x/sync/errgroup
+            - github.com/google/renameio/v2
+            - github.com/stuffbucket/ovh-cli/internal/xdgpaths
+
     forbidigo:
       forbid:
         - pattern: 'auth\.(LoadCredentials|StoreCredentials|DeleteCredentials|RefreshOAuth2|NewPKCE|RandomState|LoopbackListen|ExchangePKCE|ValidateHost)'
